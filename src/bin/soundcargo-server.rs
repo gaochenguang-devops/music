@@ -305,25 +305,35 @@ async fn websocket(mut socket: WebSocket, state: AppState) {
 }
 
 async fn play(State(state): State<AppState>) -> Result<Json<PlaybackSnapshot>, ApiError> {
-    let index = {
+    let (index, already_loaded) = {
         let mut playlist = state.inner.playlist.lock().unwrap();
-        if playlist.current.is_none() {
+        let already_loaded = playlist.current.is_some();
+        if !already_loaded {
             playlist.current = (!playlist.tracks.is_empty()).then_some(0);
         }
-        playlist.current
+        (playlist.current, already_loaded)
     };
     if let Some(index) = index {
-        let path = state.inner.playlist.lock().unwrap().tracks[index]
-            .path
-            .clone();
-        state
-            .inner
-            .commands
-            .send(PlayerCommand::Load {
-                path,
-                autoplay: true,
-            })
-            .map_err(ApiError::send)?;
+        if already_loaded {
+            tracing::info!("resuming current track");
+            state
+                .inner
+                .commands
+                .send(PlayerCommand::Play)
+                .map_err(ApiError::send)?;
+        } else {
+            let path = state.inner.playlist.lock().unwrap().tracks[index]
+                .path
+                .clone();
+            state
+                .inner
+                .commands
+                .send(PlayerCommand::Load {
+                    path,
+                    autoplay: true,
+                })
+                .map_err(ApiError::send)?;
+        }
         *state.inner.playing.lock().unwrap() = true;
         Ok(Json(snapshot(&state)))
     } else {
