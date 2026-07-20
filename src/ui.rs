@@ -826,7 +826,7 @@ impl MusicApp {
                     if ui
                         .add_sized(
                             [42.0, 42.0],
-                            egui::Button::new(RichText::new("◀").color(ACCENT_DARK))
+                            egui::Button::new(RichText::new("⏮").color(ACCENT_DARK))
                                 .corner_radius(21),
                         )
                         .on_hover_text("上一曲")
@@ -834,7 +834,7 @@ impl MusicApp {
                     {
                         self.advance(true);
                     }
-                    let play_text = if self.is_playing { "Ⅱ" } else { "▶" };
+                    let play_text = if self.is_playing { "⏸" } else { "▶" };
                     if ui
                         .add_sized(
                             [50.0, 42.0],
@@ -857,7 +857,7 @@ impl MusicApp {
                     if ui
                         .add_sized(
                             [42.0, 42.0],
-                            egui::Button::new(RichText::new("■").color(MUTED)).corner_radius(21),
+                            egui::Button::new(RichText::new("⏹").color(MUTED)).corner_radius(21),
                         )
                         .on_hover_text("停止")
                         .clicked()
@@ -867,7 +867,7 @@ impl MusicApp {
                     if ui
                         .add_sized(
                             [42.0, 42.0],
-                            egui::Button::new(RichText::new("▶").color(ACCENT_DARK))
+                            egui::Button::new(RichText::new("⏭").color(ACCENT_DARK))
                                 .corner_radius(21),
                         )
                         .on_hover_text("下一曲")
