@@ -40,6 +40,13 @@ sudo apt install libasound2-dev pkg-config
 4. 点击歌词行可跳转；顶部“选择歌词”可覆盖当前歌曲的自动匹配结果。
 5. 按住播放列表项并拖到目标项上释放，可调整顺序。
 
+也可以从命令行直接打开一个 MP3 或扫描目录：
+
+```powershell
+target\release\sonora.exe "D:\Music\Artist - Song.mp3"
+target\release\sonora.exe "D:\Music"
+```
+
 LRC 支持 `[mm:ss]`、`[mm:ss.xx]`、同一行多个时间标签，以及 `ti/ar/al/by` 元数据。无法识别的标签和损坏行会被跳过。
 
 ## 架构
@@ -56,4 +63,3 @@ LRC 支持 `[mm:ss]`、`[mm:ss.xx]`、同一行多个时间标签，以及 `ti/a
 ## 平台说明
 
 音频设备由 CPAL（rodio 的底层）抽象，因此代码不包含 Windows、macOS 或 Linux 专属播放逻辑。中文字体从各平台常见系统字体中按顺序选择；若系统未安装候选字体，egui 会回退到内置字体。
-

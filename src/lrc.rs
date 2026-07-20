@@ -56,9 +56,14 @@ impl Lyrics {
             }
         }
 
+        // Bilingual files often repeat the timeline for a translated version.
+        // Treat equal timestamps as one synchronized, multi-line lyric block.
         let lines = timed
             .into_iter()
-            .flat_map(|(time, texts)| texts.into_iter().map(move |text| LyricLine { time, text }))
+            .map(|(time, texts)| LyricLine {
+                time,
+                text: texts.join("\n"),
+            })
             .collect();
         Self { metadata, lines }
     }
@@ -109,9 +114,9 @@ mod tests {
         );
         assert_eq!(lrc.metadata.title.as_deref(), Some("Roads"));
         assert_eq!(lrc.metadata.artist.as_deref(), Some("Portishead"));
-        assert_eq!(lrc.lines.len(), 3);
+        assert_eq!(lrc.lines.len(), 2);
         assert_eq!(lrc.lines[1].time, Duration::from_secs(3));
-        assert_eq!(lrc.lines[2].time, Duration::from_secs(3));
+        assert_eq!(lrc.lines[1].text, "Oh, can't anybody see\nSecond voice");
     }
 
     #[test]

@@ -2,8 +2,8 @@ use std::{fs, path::PathBuf, time::Duration};
 
 use directories::ProjectDirs;
 use eframe::egui::{
-    self, Align, Color32, FontData, FontDefinitions, FontFamily, Layout, RichText, Sense, Stroke,
-    TextureHandle, Vec2,
+    self, Align, Color32, FontData, FontDefinitions, FontFamily, FontId, Layout, RichText, Sense,
+    Shadow, Stroke, TextureHandle, Vec2,
 };
 use rand::prelude::IndexedRandom;
 use serde::{Deserialize, Serialize};
@@ -15,13 +15,22 @@ use crate::{
     utils::format_duration,
 };
 
-const BG: Color32 = Color32::from_rgb(14, 17, 20);
-const PANEL: Color32 = Color32::from_rgb(23, 27, 31);
-const PANEL_HOVER: Color32 = Color32::from_rgb(34, 39, 44);
-const TEXT: Color32 = Color32::from_rgb(230, 233, 235);
-const MUTED: Color32 = Color32::from_rgb(135, 145, 151);
-const ACCENT: Color32 = Color32::from_rgb(56, 214, 164);
-const WARM: Color32 = Color32::from_rgb(245, 174, 73);
+const BG: Color32 = Color32::from_rgb(232, 239, 242);
+const SURFACE: Color32 = Color32::from_rgb(250, 252, 253);
+const SURFACE_ALT: Color32 = Color32::from_rgb(242, 247, 249);
+const PANEL_HOVER: Color32 = Color32::from_rgb(232, 243, 246);
+const TEXT: Color32 = Color32::from_rgb(25, 37, 47);
+const MUTED: Color32 = Color32::from_rgb(112, 128, 139);
+const ACCENT: Color32 = Color32::from_rgb(14, 179, 197);
+const ACCENT_DARK: Color32 = Color32::from_rgb(4, 126, 142);
+const ACCENT_PALE: Color32 = Color32::from_rgb(222, 247, 246);
+const BORDER: Color32 = Color32::from_rgb(214, 225, 230);
+const SHADOW: Shadow = Shadow {
+    offset: [0, 4],
+    blur: 18,
+    spread: 0,
+    color: Color32::from_black_alpha(24),
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AppConfig {
@@ -30,6 +39,12 @@ struct AppConfig {
     speed: f32,
     dark_theme: bool,
     device: Option<String>,
+    #[serde(default = "default_playlist_open")]
+    playlist_open: bool,
+}
+
+fn default_playlist_open() -> bool {
+    true
 }
 
 impl Default for AppConfig {
@@ -38,8 +53,9 @@ impl Default for AppConfig {
             volume: 0.75,
             mode: PlayMode::Sequential,
             speed: 1.0,
-            dark_theme: true,
+            dark_theme: false,
             device: None,
+            playlist_open: true,
         }
     }
 }
@@ -82,6 +98,7 @@ pub struct MusicApp {
     status: Option<String>,
     dragged_track: Option<usize>,
     scroll_to_lyric: Option<usize>,
+    playlist_open: bool,
 }
 
 impl MusicApp {
@@ -97,7 +114,7 @@ impl MusicApp {
                 .commands
                 .send(PlayerCommand::SwitchDevice(config.device.clone()));
         }
-        Self {
+        let mut app = Self {
             audio,
             playlist: Playlist::default(),
             lyrics: Lyrics::default(),
@@ -114,7 +131,22 @@ impl MusicApp {
             status: None,
             dragged_track: None,
             scroll_to_lyric: None,
+            playlist_open: config.playlist_open,
+        };
+
+        let startup_paths: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
+        for path in startup_paths {
+            let errors = if path.is_dir() {
+                app.playlist.add_folder(&path)
+            } else {
+                app.playlist.add_files([path])
+            };
+            app.report_errors(errors);
         }
+        if !app.playlist.tracks.is_empty() {
+            app.play_index(0);
+        }
+        app
     }
 
     fn command(&self, command: PlayerCommand) {
@@ -262,8 +294,9 @@ impl MusicApp {
             volume: self.volume,
             mode: self.mode,
             speed: self.speed,
-            dark_theme: true,
+            dark_theme: false,
             device: self.selected_device.clone(),
+            playlist_open: self.playlist_open,
         }
         .save();
     }
@@ -277,36 +310,70 @@ impl eframe::App for MusicApp {
         ctx.request_repaint_after(Duration::from_millis(33));
 
         egui::Panel::top("header")
-            .exact_size(100.0)
+            .exact_size(118.0)
             .frame(
-                egui::Frame::new()
-                    .fill(PANEL)
-                    .inner_margin(egui::Margin::symmetric(26, 14)),
+                surface_frame()
+                    .outer_margin(egui::Margin::symmetric(18, 12))
+                    .inner_margin(egui::Margin::symmetric(22, 14)),
             )
             .show(ui, |ui| self.header(ui));
         egui::Panel::bottom("controls")
-            .exact_size(128.0)
+            .exact_size(136.0)
             .frame(
-                egui::Frame::new()
-                    .fill(PANEL)
-                    .inner_margin(egui::Margin::symmetric(24, 12)),
+                surface_frame()
+                    .outer_margin(egui::Margin::symmetric(18, 12))
+                    .inner_margin(egui::Margin::symmetric(22, 12)),
             )
             .show(ui, |ui| self.controls(ui));
-        egui::Panel::right("playlist")
-            .resizable(true)
-            .default_size(360.0)
-            .size_range(280.0..=480.0)
-            .frame(
-                egui::Frame::new()
-                    .fill(Color32::from_rgb(18, 21, 24))
-                    .inner_margin(egui::Margin::symmetric(16, 18)),
-            )
-            .show(ui, |ui| self.playlist_panel(ui));
+        if self.playlist_open {
+            egui::Panel::right("playlist")
+                .resizable(true)
+                .default_size(360.0)
+                .size_range(280.0..=480.0)
+                .frame(
+                    surface_frame()
+                        .outer_margin(egui::Margin {
+                            left: 6,
+                            right: 18,
+                            top: 8,
+                            bottom: 8,
+                        })
+                        .inner_margin(egui::Margin::symmetric(16, 16)),
+                )
+                .show(ui, |ui| self.playlist_panel(ui));
+        } else {
+            egui::Panel::right("playlist-collapsed")
+                .exact_size(48.0)
+                .frame(
+                    surface_frame()
+                        .outer_margin(egui::Margin {
+                            left: 6,
+                            right: 18,
+                            top: 8,
+                            bottom: 8,
+                        })
+                        .inner_margin(egui::Margin::same(8)),
+                )
+                .show(ui, |ui| {
+                    if ui
+                        .add_sized([32.0, 36.0], egui::Button::new("◀"))
+                        .on_hover_text("展开播放列表")
+                        .clicked()
+                    {
+                        self.playlist_open = true;
+                    }
+                });
+        }
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::new()
-                    .fill(BG)
-                    .inner_margin(egui::Margin::same(24)),
+                surface_frame()
+                    .outer_margin(egui::Margin {
+                        left: 18,
+                        right: 6,
+                        top: 8,
+                        bottom: 8,
+                    })
+                    .inner_margin(egui::Margin::same(18)),
             )
             .show(ui, |ui| self.lyrics_panel(ui));
 
@@ -382,64 +449,106 @@ impl MusicApp {
         let available = ui.available_size();
         ui.horizontal(|ui| {
             ui.set_height(available.y);
-            ui.vertical_centered(|ui| {
-                let side = available.x.min(available.y) * 0.27;
-                if let Some(texture) = &self.cover_texture {
-                    ui.add(
-                        egui::Image::new(texture)
-                            .fit_to_exact_size(Vec2::splat(side))
-                            .corner_radius(6),
-                    );
-                } else {
-                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
-                    ui.painter()
-                        .rect_filled(rect, 6, Color32::from_rgb(31, 37, 41));
-                    ui.painter()
-                        .circle_stroke(rect.center(), side * 0.22, Stroke::new(2.0, MUTED));
-                    ui.painter()
-                        .circle_filled(rect.center(), side * 0.055, WARM);
-                }
-                ui.add_space(12.0);
-                ui.label(RichText::new("ALBUM / LYRICS").size(10.0).color(MUTED));
-            });
+            let cover_column = (available.x * 0.34).clamp(190.0, 320.0);
+            ui.allocate_ui_with_layout(
+                Vec2::new(cover_column, available.y),
+                Layout::top_down(Align::Center),
+                |ui| {
+                    let side = available.x.min(available.y) * 0.27;
+                    if let Some(texture) = &self.cover_texture {
+                        ui.add(
+                            egui::Image::new(texture)
+                                .fit_to_exact_size(Vec2::splat(side))
+                                .corner_radius(6),
+                        );
+                    } else {
+                        let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
+                        ui.painter()
+                            .rect_filled(rect, 6, Color32::from_rgb(31, 37, 41));
+                        ui.painter().circle_stroke(
+                            rect.center(),
+                            side * 0.22,
+                            Stroke::new(2.0, MUTED),
+                        );
+                        ui.painter()
+                            .circle_filled(rect.center(), side * 0.055, WARM);
+                    }
+                    ui.add_space(12.0);
+                    ui.label(RichText::new("ALBUM / LYRICS").size(10.0).color(MUTED));
+                },
+            );
             ui.separator();
             let active = self.lyrics.active_index(self.position);
-            egui::ScrollArea::vertical()
-                .id_salt("lyrics-scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.add_space(available.y * 0.35);
-                    if self.lyrics.lines.is_empty() {
-                        ui.vertical_centered(|ui| {
-                            ui.add_space(50.0);
-                            ui.label(RichText::new("暂无歌词").size(22.0).color(MUTED));
+            let lyrics_width = ui.available_width().max(120.0);
+            ui.allocate_ui_with_layout(
+                Vec2::new(lyrics_width, available.y),
+                Layout::top_down(Align::Center).with_cross_justify(true),
+                |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("lyrics-scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.set_width(lyrics_width);
+                            ui.add_space(available.y * 0.35);
+                            if self.lyrics.lines.is_empty() {
+                                ui.vertical_centered(|ui| {
+                                    ui.add_space(50.0);
+                                    ui.label(RichText::new("暂无歌词").size(22.0).color(MUTED));
+                                });
+                            } else {
+                                let mut active_response = None;
+                                for index in 0..self.lyrics.lines.len() {
+                                    let line = &self.lyrics.lines[index];
+                                    let is_active = active == Some(index);
+                                    let font_size = if is_active { 23.0 } else { 16.0 };
+                                    let color = if is_active { ACCENT } else { MUTED };
+                                    let row_width = (lyrics_width - 28.0).max(80.0);
+                                    let mut layout_job = egui::text::LayoutJob::simple(
+                                        line.text.clone(),
+                                        FontId::new(font_size, FontFamily::Proportional),
+                                        color,
+                                        row_width - 24.0,
+                                    );
+                                    layout_job.halign = Align::Center;
+                                    let galley = ui.painter().layout_job(layout_job);
+                                    let row_height = (galley.size().y + 22.0).max(if is_active {
+                                        52.0
+                                    } else {
+                                        38.0
+                                    });
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        Vec2::new(row_width, row_height),
+                                        Sense::click(),
+                                    );
+                                    if response.hovered() {
+                                        ui.painter().rect_filled(rect, 4, PANEL_HOVER);
+                                    }
+                                    let text_position =
+                                        rect.center() - galley.rect.center().to_vec2();
+                                    ui.painter().galley(text_position, galley, color);
+                                    if response.clicked() {
+                                        self.command(PlayerCommand::Seek(line.time));
+                                        self.position = line.time;
+                                    }
+                                    if is_active {
+                                        active_response = Some(response);
+                                    }
+                                }
+                                // Request scrolling only after every row has contributed to
+                                // the scroll area's full content height.
+                                if self.scroll_to_lyric != active {
+                                    if let Some(response) = active_response {
+                                        response.scroll_to_me(Some(Align::Center));
+                                    }
+                                    if active.is_some() {
+                                        self.scroll_to_lyric = active;
+                                    }
+                                }
+                            }
+                            ui.add_space(available.y * 0.35);
                         });
-                    } else {
-                        for index in 0..self.lyrics.lines.len() {
-                            let line = &self.lyrics.lines[index];
-                            let is_active = active == Some(index);
-                            let text = RichText::new(&line.text)
-                                .size(if is_active { 23.0 } else { 16.0 })
-                                .color(if is_active { ACCENT } else { MUTED })
-                                .strong();
-                            let response = ui.add_sized(
-                                [ui.available_width(), if is_active { 44.0 } else { 34.0 }],
-                                egui::Button::new(text)
-                                    .fill(Color32::TRANSPARENT)
-                                    .stroke(Stroke::NONE),
-                            );
-                            if response.clicked() {
-                                self.command(PlayerCommand::Seek(line.time));
-                                self.position = line.time;
-                            }
-                            if is_active && self.scroll_to_lyric != active {
-                                response.scroll_to_me(Some(Align::Center));
-                                self.scroll_to_lyric = active;
-                            }
-                        }
-                    }
-                    ui.add_space(available.y * 0.35);
-                });
+                },
+            );
         });
     }
 
@@ -447,6 +556,9 @@ impl MusicApp {
         ui.horizontal(|ui| {
             ui.label(RichText::new("播放列表").size(18.0).color(TEXT).strong());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.small_button("▶").on_hover_text("收起播放列表").clicked() {
+                    self.playlist_open = false;
+                }
                 if ui.small_button("清空").clicked() {
                     self.playlist = Playlist::default();
                     self.lyrics = Lyrics::default();
@@ -566,61 +678,82 @@ impl MusicApp {
             );
         });
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("mode")
-                .selected_text(self.mode.label())
-                .show_ui(ui, |ui| {
-                    for mode in PlayMode::ALL {
-                        if ui
-                            .selectable_value(&mut self.mode, mode, mode.label())
-                            .changed()
-                        {
-                            self.save_config();
+        ui.columns(3, |columns| {
+            columns[0].horizontal(|ui| {
+                egui::ComboBox::from_id_salt("mode")
+                    .selected_text(self.mode.label())
+                    .show_ui(ui, |ui| {
+                        for mode in PlayMode::ALL {
+                            if ui
+                                .selectable_value(&mut self.mode, mode, mode.label())
+                                .changed()
+                            {
+                                self.save_config();
+                            }
+                        }
+                    });
+                egui::ComboBox::from_id_salt("speed")
+                    .selected_text(format!("{:.2}×", self.speed))
+                    .width(70.0)
+                    .show_ui(ui, |ui| {
+                        for speed in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0] {
+                            if ui
+                                .selectable_value(&mut self.speed, speed, format!("{speed:.2}×"))
+                                .changed()
+                            {
+                                self.command(PlayerCommand::SetSpeed(speed));
+                                self.save_config();
+                            }
+                        }
+                    });
+            });
+
+            columns[1].with_layout(Layout::top_down(Align::Center), |ui| {
+                ui.horizontal(|ui| {
+                    const TRANSPORT_WIDTH: f32 = 189.0;
+                    ui.add_space(((ui.available_width() - TRANSPORT_WIDTH) * 0.5).max(0.0));
+                    if ui
+                        .add_sized([38.0, 38.0], egui::Button::new("◀"))
+                        .on_hover_text("上一曲")
+                        .clicked()
+                    {
+                        self.advance(true);
+                    }
+                    let play_text = if self.is_playing { "Ⅱ" } else { "▶" };
+                    if ui
+                        .add_sized(
+                            [48.0, 38.0],
+                            egui::Button::new(RichText::new(play_text).size(20.0).color(BG))
+                                .fill(ACCENT),
+                        )
+                        .clicked()
+                    {
+                        if self.playlist.current.is_none() && !self.playlist.tracks.is_empty() {
+                            self.play_index(0);
+                        } else if self.is_playing {
+                            self.command(PlayerCommand::Pause);
+                        } else {
+                            self.command(PlayerCommand::Play);
                         }
                     }
-                });
-            ui.add_space(12.0);
-            if ui.button("◀").on_hover_text("上一曲").clicked() {
-                self.advance(true);
-            }
-            let play_text = if self.is_playing { "Ⅱ" } else { "▶" };
-            if ui
-                .add_sized(
-                    [48.0, 38.0],
-                    egui::Button::new(RichText::new(play_text).size(20.0).color(BG)).fill(ACCENT),
-                )
-                .clicked()
-            {
-                if self.playlist.current.is_none() && !self.playlist.tracks.is_empty() {
-                    self.play_index(0);
-                } else if self.is_playing {
-                    self.command(PlayerCommand::Pause);
-                } else {
-                    self.command(PlayerCommand::Play);
-                }
-            }
-            if ui.button("■").on_hover_text("停止").clicked() {
-                self.command(PlayerCommand::Stop);
-            }
-            if ui.button("▶").on_hover_text("下一曲").clicked() {
-                self.advance(false);
-            }
-            ui.add_space(16.0);
-            egui::ComboBox::from_id_salt("speed")
-                .selected_text(format!("{:.2}×", self.speed))
-                .width(70.0)
-                .show_ui(ui, |ui| {
-                    for speed in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0] {
-                        if ui
-                            .selectable_value(&mut self.speed, speed, format!("{speed:.2}×"))
-                            .changed()
-                        {
-                            self.command(PlayerCommand::SetSpeed(speed));
-                            self.save_config();
-                        }
+                    if ui
+                        .add_sized([38.0, 38.0], egui::Button::new("■"))
+                        .on_hover_text("停止")
+                        .clicked()
+                    {
+                        self.command(PlayerCommand::Stop);
+                    }
+                    if ui
+                        .add_sized([38.0, 38.0], egui::Button::new("▶"))
+                        .on_hover_text("下一曲")
+                        .clicked()
+                    {
+                        self.advance(false);
                     }
                 });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            });
+
+            columns[2].with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
                     RichText::new(format!("{:02}", (self.volume * 100.0).round() as u8))
                         .monospace()
