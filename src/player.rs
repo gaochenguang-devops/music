@@ -55,6 +55,14 @@ impl AudioController {
             events: event_rx,
         }
     }
+
+    /// Moves the event receiver out so a headless server can bridge playback
+    /// events into an async WebSocket stream while retaining the audio guard.
+    #[allow(dead_code)]
+    pub fn take_events(&mut self) -> Receiver<PlayerEvent> {
+        let (_sender, replacement) = mpsc::channel();
+        std::mem::replace(&mut self.events, replacement)
+    }
 }
 
 impl Drop for AudioController {

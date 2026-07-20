@@ -55,7 +55,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --bins
 
       - name: Package Windows build
         if: runner.os == 'Windows'
@@ -64,6 +64,7 @@ jobs:
           $package = "package"
           New-Item -ItemType Directory -Force "$package/data" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$package/${{ matrix.binary }}"
+          Copy-Item "target/${{ matrix.target }}/release/soundcargo-server.exe" "$package/soundcargo-server.exe"
           Copy-Item README.md "$package/README.md"
           New-Item -ItemType File -Force "$package/data/.gitkeep" | Out-Null
           Compress-Archive -Path "$package/*" -DestinationPath "${{ matrix.archive }}" -Force
@@ -73,6 +74,7 @@ jobs:
         run: |
           mkdir -p package/data
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" package/
+          cp "target/${{ matrix.target }}/release/soundcargo-server" package/
           cp README.md package/
           touch package/data/.gitkeep
           tar -czf "${{ matrix.archive }}" -C package .

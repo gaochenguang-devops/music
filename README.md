@@ -56,6 +56,22 @@ LRC 支持 `[mm:ss]`、`[mm:ss.xx]`、同一行多个时间标签，以及 `ti/a
 - `src/ui.rs`：egui 即时界面、状态协调、封面纹理和 JSON 配置持久化。
 - `src/utils.rs`：时间显示、扩展名判断和文件名元数据兜底。
 
+## Web 服务端
+
+项目同时提供无桌面窗口的 `soundcargo-server` 服务端程序。它复用 `rodio`、播放列表和 LRC 核心，扫描当前目录下的 `data` 音乐库，并通过浏览器远程控制服务器音频输出。
+
+```bash
+cargo run --release --bin soundcargo-server
+```
+
+服务默认监听 `0.0.0.0:8787`，浏览器访问 `http://服务器地址:8787`。可以通过环境变量修改监听地址：
+
+```bash
+SOUNDCARGO_BIND=127.0.0.1:8787 ./soundcargo-server
+```
+
+服务端提供播放列表、播放/暂停/停止、上一曲/下一曲、进度、音量、倍速、播放模式、歌词和 WebSocket 实时状态。Linux 无桌面服务器仍需要 ALSA/PulseAudio/PipeWire 音频输出设备；浏览器负责远程控制，声音由服务器输出。
+
 详细数据流和设计取舍见 [`docs/architecture.md`](docs/architecture.md)。
 
 ## 平台说明

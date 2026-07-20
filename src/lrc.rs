@@ -1,8 +1,9 @@
 use std::{collections::BTreeMap, fs, path::Path, time::Duration};
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct LrcMetadata {
     pub title: Option<String>,
     pub artist: Option<String>,
@@ -10,13 +11,13 @@ pub struct LrcMetadata {
     pub author: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LyricLine {
     pub time: Duration,
     pub text: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Lyrics {
     pub metadata: LrcMetadata,
     pub lines: Vec<LyricLine>,
