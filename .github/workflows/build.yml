@@ -44,7 +44,7 @@ jobs:
 
       - name: Install Linux audio dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes libasound2-dev pkg-config libglib2.0-dev libgtk-3-dev libappindicator3-dev
+        run: sudo apt-get update && sudo apt-get install --yes libasound2-dev pkg-config libglib2.0-dev libgtk-3-dev libappindicator3-dev libxdo-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
