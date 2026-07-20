@@ -1,4 +1,6 @@
 /target/
+data/*
+!data/.gitkeep
 *.pdb
 *.log
 .vscode/

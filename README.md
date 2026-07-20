@@ -1,6 +1,6 @@
-# Sonora
+# SoundCargo
 
-Sonora 是一个使用 Rust 编写的跨平台桌面 MP3 播放器。它以 `egui/eframe` 提供原生桌面界面，使用 `rodio` 管理播放和设备、`symphonia` 探测 MP3 音频信息，并支持同步 LRC 歌词。
+SoundCargo 是一个使用 Rust 编写的跨平台桌面 MP3 播放器。它以 `egui/eframe` 提供原生桌面界面，使用 `rodio` 管理播放和设备、`symphonia` 探测 MP3 音频信息，并支持同步 LRC 歌词。
 
 ## 功能
 
@@ -8,7 +8,8 @@ Sonora 是一个使用 Rust 编写的跨平台桌面 MP3 播放器。它以 `egu
 - 音量 0–100、静音、0.5×–2.0× 倍速
 - 顺序、单曲循环、列表循环、随机四种播放模式
 - 枚举并热切换系统音频输出设备，切换后恢复进度和播放状态
-- 批量导入 MP3 或递归扫描文件夹
+- 固定使用程序当前目录下的 `data` 音乐库，启动时自动递归扫描
+- 导入 MP3 时自动复制到 `data`，同名 LRC 也会一并复制
 - 读取 ID3 标题、歌手、专辑和内嵌封面，缺失时从 `歌手 - 歌名.mp3` 推导
 - 自动匹配同目录同名 `.lrc`，也可手动选择歌词
 - 当前歌词高亮、自动居中，点击歌词跳转
@@ -24,7 +25,9 @@ cargo build --release
 cargo run --release
 ```
 
-生成的程序位于 Windows 的 `target/release/sonora.exe`，macOS/Linux 为 `target/release/sonora`。
+生成的程序位于 Windows 的 `target/release/SoundCargo.exe`，macOS/Linux 为 `target/release/SoundCargo`。
+
+推送到 GitHub 后，GitHub Actions 会自动构建 Windows x64、Linux x64、macOS Intel 和 macOS Apple Silicon 版本，并将可执行文件、README 和 `data` 目录打包为构建产物。推送 `v*` 标签（例如 `v0.1.0`）还会自动创建 GitHub Release 并上传四个平台的压缩包。
 
 Linux 需要系统提供 ALSA 开发库；Debian/Ubuntu 可安装：
 
@@ -34,18 +37,13 @@ sudo apt install libasound2-dev pkg-config
 
 ## 操作
 
-1. 点击右侧“添加”选择一个或多个 MP3，或点击“文件夹”递归扫描目录。
-2. 双击列表中的歌曲开始播放；同名 LRC 会自动加载。
+1. 点击右侧“添加”选择一个或多个 MP3；文件会复制到程序当前目录的 `data` 文件夹。
+2. 程序启动时会自动扫描 `data` 下的所有 MP3 并载入播放列表；同名 LRC 会自动加载。
 3. 使用底栏控制播放、进度、模式、倍速和音量。
 4. 点击歌词行可跳转；顶部“选择歌词”可覆盖当前歌曲的自动匹配结果。
 5. 按住播放列表项并拖到目标项上释放，可调整顺序。
-
-也可以从命令行直接打开一个 MP3 或扫描目录：
-
-```powershell
-target\release\sonora.exe "D:\Music\Artist - Song.mp3"
-target\release\sonora.exe "D:\Music"
-```
+6. 点击窗口关闭按钮后，可选择“退出应用”“最小化到托盘”或“取消”。最小化后播放器和音频会继续在后台运行。
+7. 左键点击托盘图标或选择托盘菜单中的“显示 SoundCargo”可恢复窗口；选择“退出 SoundCargo”可彻底退出应用。
 
 LRC 支持 `[mm:ss]`、`[mm:ss.xx]`、同一行多个时间标签，以及 `ti/ar/al/by` 元数据。无法识别的标签和损坏行会被跳过。
 

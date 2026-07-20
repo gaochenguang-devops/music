@@ -1,4 +1,4 @@
-# Sonora 参考图 UI 重设计
+# SoundCargo 参考图 UI 重设计
 
 ## 视觉方向
 

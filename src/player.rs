@@ -21,6 +21,7 @@ pub enum PlayerCommand {
     SetVolume(f32),
     SetSpeed(f32),
     SwitchDevice(Option<String>),
+    RefreshDevices,
     Shutdown,
 }
 
@@ -165,6 +166,10 @@ fn handle_command(command: PlayerCommand, state: &mut AudioState, events: &Sende
         }
         PlayerCommand::SwitchDevice(name) => {
             switch_device(state, name).map(|_| send_devices(events, state.selected_device.clone()))
+        }
+        PlayerCommand::RefreshDevices => {
+            send_devices(events, state.selected_device.clone());
+            Ok(())
         }
         PlayerCommand::Shutdown => Ok(()),
     };

@@ -1,4 +1,8 @@
-use std::{fs, path::PathBuf, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use directories::ProjectDirs;
 use eframe::egui::{
@@ -12,12 +16,15 @@ use crate::{
     lrc::Lyrics,
     player::{AudioController, PlayerCommand, PlayerEvent},
     playlist::{PlayMode, Playlist, Track},
+    tray::{self, TrayCommand},
     utils::format_duration,
 };
 
 const BG: Color32 = Color32::from_rgb(232, 239, 242);
 const SURFACE: Color32 = Color32::from_rgb(250, 252, 253);
 const SURFACE_ALT: Color32 = Color32::from_rgb(242, 247, 249);
+const BUTTON_BG: Color32 = Color32::from_rgb(232, 246, 247);
+const BUTTON_BORDER: Color32 = Color32::from_rgb(188, 222, 225);
 const PANEL_HOVER: Color32 = Color32::from_rgb(232, 243, 246);
 const TEXT: Color32 = Color32::from_rgb(25, 37, 47);
 const MUTED: Color32 = Color32::from_rgb(112, 128, 139);
@@ -99,6 +106,11 @@ pub struct MusicApp {
     dragged_track: Option<usize>,
     scroll_to_lyric: Option<usize>,
     playlist_open: bool,
+    tray_commands: std::sync::mpsc::Receiver<TrayCommand>,
+    _tray_icon: Option<tray_icon::TrayIcon>,
+    close_prompt: bool,
+    close_to_tray: bool,
+    allow_close: bool,
 }
 
 impl MusicApp {
@@ -107,6 +119,7 @@ impl MusicApp {
         configure_style(&cc.egui_ctx);
         let config = AppConfig::load();
         let audio = AudioController::spawn();
+        let (_tray_icon, tray_commands) = tray::create(&cc.egui_ctx);
         let _ = audio.commands.send(PlayerCommand::SetVolume(config.volume));
         let _ = audio.commands.send(PlayerCommand::SetSpeed(config.speed));
         if config.device.is_some() {
@@ -132,19 +145,22 @@ impl MusicApp {
             dragged_track: None,
             scroll_to_lyric: None,
             playlist_open: config.playlist_open,
+            tray_commands,
+            _tray_icon,
+            close_prompt: false,
+            close_to_tray: true,
+            allow_close: false,
         };
 
-        let startup_paths: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
-        for path in startup_paths {
-            let errors = if path.is_dir() {
-                app.playlist.add_folder(&path)
-            } else {
-                app.playlist.add_files([path])
-            };
+        let data_dir = music_data_dir();
+        if let Err(err) = fs::create_dir_all(&data_dir) {
+            app.report_errors(vec![format!(
+                "无法创建音乐数据目录 {}：{err}",
+                data_dir.display()
+            )]);
+        } else {
+            let errors = app.playlist.add_folder(&data_dir);
             app.report_errors(errors);
-        }
-        if !app.playlist.tracks.is_empty() {
-            app.play_index(0);
         }
         app
     }
@@ -231,14 +247,23 @@ impl MusicApp {
             .add_filter("MP3 audio", &["mp3"])
             .pick_files()
         {
-            let errors = self.playlist.add_files(paths);
-            self.report_errors(errors);
-        }
-    }
-
-    fn add_folder(&mut self) {
-        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-            let errors = self.playlist.add_folder(&folder);
+            let data_dir = music_data_dir();
+            let mut imported = Vec::new();
+            let mut errors = Vec::new();
+            if let Err(err) = fs::create_dir_all(&data_dir) {
+                errors.push(format!(
+                    "无法创建音乐数据目录 {}：{err}",
+                    data_dir.display()
+                ));
+            } else {
+                for source in paths {
+                    match copy_music_to_data(&source, &data_dir) {
+                        Ok(path) => imported.push(path),
+                        Err(err) => errors.push(err),
+                    }
+                }
+                errors.extend(self.playlist.add_files(imported));
+            }
             self.report_errors(errors);
         }
     }
@@ -303,6 +328,30 @@ impl MusicApp {
 }
 
 impl eframe::App for MusicApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        while let Ok(command) = self.tray_commands.try_recv() {
+            match command {
+                TrayCommand::Show => {
+                    self.allow_close = false;
+                    self.close_prompt = false;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                TrayCommand::Exit => {
+                    self.allow_close = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+        if ctx.input(|input| input.viewport().close_requested())
+            && !self.allow_close
+            && !self.close_prompt
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.close_prompt = true;
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.drain_events();
@@ -349,29 +398,9 @@ impl eframe::App for MusicApp {
                 .show(ui, |ui| self.playlist_panel(ui));
         } else {
             egui::Panel::right("playlist-collapsed")
-                .exact_size(48.0)
-                .frame(
-                    surface_frame()
-                        .outer_margin(egui::Margin {
-                            left: 6,
-                            right: 18,
-                            top: 8,
-                            bottom: 8,
-                        })
-                        .inner_margin(egui::Margin::same(8)),
-                )
-                .show(ui, |ui| {
-                    ui.add_space(((ui.available_height() - 44.0) * 0.5).max(0.0));
-                    ui.vertical_centered(|ui| {
-                        if ui
-                            .add_sized([32.0, 44.0], egui::Button::new("◀"))
-                            .on_hover_text("展开播放列表")
-                            .clicked()
-                        {
-                            self.playlist_open = true;
-                        }
-                    });
-                });
+                .exact_size(26.0)
+                .frame(egui::Frame::new().fill(BG))
+                .show(ui, |ui| self.playlist_toggle(ui, false));
         }
         egui::CentralPanel::default()
             .frame(
@@ -388,14 +417,108 @@ impl eframe::App for MusicApp {
 
         if let Some(message) = self.status.clone() {
             egui::Window::new("提示")
+                .title_bar(false)
                 .collapsible(false)
                 .resizable(false)
+                .default_width(360.0)
+                .auto_sized()
                 .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .frame(modal_frame())
                 .show(&ctx, |ui| {
-                    ui.label(message);
-                    if ui.button("关闭").clicked() {
-                        self.status = None;
-                    }
+                    ui.set_min_width(360.0);
+                    egui::Frame::new()
+                        .fill(ACCENT_PALE)
+                        .corner_radius(10)
+                        .inner_margin(egui::Margin::symmetric(16, 11))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new("! ").size(18.0).color(ACCENT_DARK).strong(),
+                                );
+                                ui.label(RichText::new("提示").size(16.0).color(TEXT).strong());
+                            });
+                        });
+                    ui.add_space(14.0);
+                    ui.label(RichText::new(message).size(14.0).color(TEXT));
+                    ui.add_space(16.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("关闭").clicked() {
+                            self.status = None;
+                        }
+                    });
+                });
+        }
+        if self.close_prompt {
+            egui::Window::new("关闭 SoundCargo")
+                .title_bar(false)
+                .collapsible(false)
+                .resizable(false)
+                .fixed_size([460.0, 270.0])
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .frame(modal_frame())
+                .show(&ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("退出播放器").size(20.0).color(TEXT).strong());
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui
+                                .add(egui::Button::new(
+                                    RichText::new("×").size(20.0).color(MUTED),
+                                ))
+                                .on_hover_text("取消")
+                                .clicked()
+                            {
+                                self.close_prompt = false;
+                            }
+                        });
+                    });
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(14.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            RichText::new("关闭后将停止播放并退出后台")
+                                .size(16.0)
+                                .color(TEXT)
+                                .strong(),
+                        );
+                        ui.add_space(14.0);
+                        ui.checkbox(
+                            &mut self.close_to_tray,
+                            RichText::new("最小化到系统托盘而不退出")
+                                .size(14.0)
+                                .color(TEXT),
+                        );
+                    });
+                    ui.add_space(20.0);
+                    ui.horizontal(|ui| {
+                        let button_width = (ui.available_width() - 10.0) * 0.5;
+                        if ui
+                            .add_sized([button_width, 38.0], egui::Button::new("取消"))
+                            .clicked()
+                        {
+                            self.close_prompt = false;
+                        }
+                        if ui
+                            .add_sized(
+                                [button_width, 38.0],
+                                egui::Button::new(if self.close_to_tray {
+                                    "确认并最小化"
+                                } else {
+                                    "确认退出"
+                                })
+                                .fill(ACCENT),
+                            )
+                            .clicked()
+                        {
+                            self.close_prompt = false;
+                            if self.close_to_tray {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                            } else {
+                                self.allow_close = true;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        }
+                    });
                 });
         }
     }
@@ -482,29 +605,42 @@ impl MusicApp {
                 },
             );
             ui.add_space(8.0);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let selected = self
-                    .selected_device
-                    .clone()
-                    .unwrap_or_else(|| "默认输出设备".into());
-                egui::ComboBox::from_id_salt("device")
-                    .selected_text(selected)
-                    .width((ui.available_width() - 12.0).clamp(130.0, 220.0))
-                    .show_ui(ui, |ui| {
-                        for name in self.devices.clone() {
-                            if ui
-                                .selectable_label(
-                                    self.selected_device.as_ref() == Some(&name),
-                                    &name,
-                                )
-                                .clicked()
-                            {
-                                self.selected_device = Some(name.clone());
-                                self.command(PlayerCommand::SwitchDevice(Some(name)));
+            let device_row_width = ui.available_width();
+            ui.allocate_ui_with_layout(
+                Vec2::new(device_row_width, 34.0),
+                Layout::right_to_left(Align::Center),
+                |ui| {
+                    let selected = self
+                        .selected_device
+                        .clone()
+                        .unwrap_or_else(|| "默认输出设备".into());
+                    egui::ComboBox::from_id_salt("device")
+                        .selected_text(selected)
+                        .width((ui.available_width() - 38.0).clamp(130.0, 220.0))
+                        .show_ui(ui, |ui| {
+                            for name in self.devices.clone() {
+                                if ui
+                                    .selectable_label(
+                                        self.selected_device.as_ref() == Some(&name),
+                                        &name,
+                                    )
+                                    .clicked()
+                                {
+                                    self.selected_device = Some(name.clone());
+                                    self.command(PlayerCommand::SwitchDevice(Some(name)));
+                                }
                             }
-                        }
-                    });
-            });
+                        });
+                    ui.add_space(8.0);
+                    if ui
+                        .add_sized([28.0, 28.0], egui::Button::new("↻"))
+                        .on_hover_text("刷新输出设备列表")
+                        .clicked()
+                    {
+                        self.command(PlayerCommand::RefreshDevices);
+                    }
+                },
+            );
         });
     }
 
@@ -609,10 +745,6 @@ impl MusicApp {
     }
 
     fn playlist_panel(&mut self, ui: &mut egui::Ui) {
-        let toggle_rect = egui::Rect::from_center_size(
-            egui::pos2(ui.clip_rect().left() + 14.0, ui.clip_rect().center().y),
-            Vec2::new(26.0, 48.0),
-        );
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label(RichText::new("播放列表").size(18.0).color(TEXT).strong());
@@ -631,12 +763,6 @@ impl MusicApp {
                     self.playlist = Playlist::default();
                     self.lyrics = Lyrics::default();
                     self.command(PlayerCommand::Stop);
-                }
-                if ui
-                    .add_sized([46.0, 30.0], egui::Button::new("目录"))
-                    .clicked()
-                {
-                    self.add_folder();
                 }
                 if ui
                     .add_sized([30.0, 30.0], egui::Button::new("+"))
@@ -730,12 +856,53 @@ impl MusicApp {
         } else if ui.input(|i| i.pointer.any_released()) {
             self.dragged_track = None;
         }
-        if ui
-            .put(toggle_rect, egui::Button::new("▶"))
-            .on_hover_text("收起播放列表")
-            .clicked()
-        {
-            self.playlist_open = false;
+        self.playlist_toggle(ui, true);
+    }
+
+    /// Draw a fixed-size edge handle so hover does not change its hit area.
+    fn playlist_toggle(&mut self, ui: &mut egui::Ui, expanded: bool) {
+        let panel = ui.max_rect();
+        let width = if expanded { 34.0 } else { 26.0 };
+        let rect = egui::Rect::from_center_size(
+            egui::pos2(panel.left() + width * 0.5, panel.center().y),
+            Vec2::new(width, 64.0),
+        );
+        let response = ui.interact(
+            rect,
+            ui.make_persistent_id(if expanded {
+                "playlist-collapse-handle"
+            } else {
+                "playlist-expand-handle"
+            }),
+            Sense::click(),
+        );
+        let visibility = ui.ctx().animate_bool(response.id, response.hovered());
+        let visible_amount = if expanded {
+            visibility
+        } else {
+            0.18 + visibility * 0.82
+        };
+        let alpha = (visible_amount * 224.0) as u8;
+        let fill = Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), alpha);
+        ui.painter().rect_filled(rect, 9.0, fill);
+        let text_color = Color32::from_rgba_unmultiplied(255, 255, 255, alpha);
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            if expanded { "›" } else { "‹" },
+            egui::FontId::proportional(25.0),
+            text_color,
+        );
+        if response.hovered() {
+            response.clone().on_hover_text(if expanded {
+                "收起播放列表"
+            } else {
+                "展开播放列表"
+            });
+        }
+        if response.clicked() {
+            self.playlist_open = !expanded;
+            self.save_config();
         }
     }
 
@@ -783,24 +950,33 @@ impl MusicApp {
         ui.add_space(8.0);
         ui.columns(3, |columns| {
             columns[0].scope(|ui| {
-                ui.spacing_mut().interact_size.y = 42.0;
+                ui.spacing_mut().interact_size.y = 34.0;
+                let style = ui.style_mut();
+                style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(17);
+                style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(17);
+                style.visuals.widgets.active.corner_radius = egui::CornerRadius::same(17);
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    egui::ComboBox::from_id_salt("mode")
-                        .selected_text(self.mode.label())
-                        .width(150.0)
+                    let mode_menu = egui::ComboBox::from_id_salt("mode")
+                        .selected_text(mode_icon(self.mode))
+                        .width(76.0)
                         .show_ui(ui, |ui| {
                             for mode in PlayMode::ALL {
                                 if ui
-                                    .selectable_value(&mut self.mode, mode, mode.label())
+                                    .selectable_value(
+                                        &mut self.mode,
+                                        mode,
+                                        format!("{}  {}", mode_icon(mode), mode.label()),
+                                    )
                                     .changed()
                                 {
                                     self.save_config();
                                 }
                             }
                         });
+                    mode_menu.response.on_hover_text(self.mode.label());
                     egui::ComboBox::from_id_salt("speed")
                         .selected_text(format!("{:.2}×", self.speed))
-                        .width(96.0)
+                        .width(82.0)
                         .show_ui(ui, |ui| {
                             for speed in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0] {
                                 if ui
@@ -821,7 +997,7 @@ impl MusicApp {
 
             columns[1].with_layout(Layout::top_down(Align::Center), |ui| {
                 ui.horizontal(|ui| {
-                    const TRANSPORT_WIDTH: f32 = 203.0;
+                    const TRANSPORT_WIDTH: f32 = 195.0;
                     ui.add_space(((ui.available_width() - TRANSPORT_WIDTH) * 0.5).max(0.0));
                     if ui
                         .add_sized(
@@ -837,7 +1013,7 @@ impl MusicApp {
                     let play_text = if self.is_playing { "⏸" } else { "▶" };
                     if ui
                         .add_sized(
-                            [50.0, 42.0],
+                            [42.0, 42.0],
                             egui::Button::new(
                                 RichText::new(play_text).size(20.0).color(Color32::WHITE),
                             )
@@ -916,12 +1092,71 @@ impl MusicApp {
     }
 }
 
+fn music_data_dir() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("data")
+}
+
+fn copy_music_to_data(source: &Path, data_dir: &Path) -> Result<PathBuf, String> {
+    if !crate::utils::is_mp3(source) {
+        return Err(format!("仅支持 MP3 文件：{}", source.display()));
+    }
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| format!("无法读取文件名：{}", source.display()))?;
+    let mut target = data_dir.join(file_name);
+    let source_canonical = fs::canonicalize(source).ok();
+    let mut suffix = 2;
+    while target.exists() && source_canonical.as_ref() != fs::canonicalize(&target).ok().as_ref() {
+        let stem = source
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("music");
+        let extension = source
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("mp3");
+        target = data_dir.join(format!("{stem} ({suffix}).{extension}"));
+        suffix += 1;
+    }
+    if source_canonical.as_ref() != fs::canonicalize(&target).ok().as_ref() {
+        fs::copy(source, &target)
+            .map_err(|err| format!("复制音乐失败 {}：{err}", source.display()))?;
+        let source_lrc = source.with_extension("lrc");
+        if source_lrc.exists() {
+            let target_lrc = target.with_extension("lrc");
+            fs::copy(&source_lrc, target_lrc)
+                .map_err(|err| format!("复制歌词失败 {}：{err}", source_lrc.display()))?;
+        }
+    }
+    Ok(target)
+}
+
 fn surface_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(SURFACE)
         .stroke(Stroke::new(1.0, BORDER))
         .corner_radius(14)
         .shadow(SHADOW)
+}
+
+fn modal_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(SURFACE)
+        .stroke(Stroke::new(1.0, BORDER))
+        .corner_radius(14)
+        .shadow(SHADOW)
+        .inner_margin(egui::Margin::same(16))
+}
+
+fn mode_icon(mode: PlayMode) -> &'static str {
+    match mode {
+        PlayMode::Sequential => "→",
+        PlayMode::RepeatOne => "↻1",
+        PlayMode::RepeatAll => "↻",
+        PlayMode::Shuffle => ">",
+    }
 }
 
 fn configure_style(ctx: &egui::Context) {
@@ -934,10 +1169,10 @@ fn configure_style(ctx: &egui::Context) {
     style.visuals.override_text_color = Some(TEXT);
     style.visuals.faint_bg_color = SURFACE_ALT;
     style.visuals.extreme_bg_color = Color32::WHITE;
-    style.visuals.widgets.inactive.bg_fill = SURFACE_ALT;
-    style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
+    style.visuals.widgets.inactive.bg_fill = BUTTON_BG;
+    style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BUTTON_BORDER);
     style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.2, MUTED);
-    style.visuals.widgets.hovered.bg_fill = PANEL_HOVER;
+    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(211, 239, 240);
     style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, ACCENT);
     style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.5, ACCENT_DARK);
     style.visuals.widgets.active.bg_fill = ACCENT;

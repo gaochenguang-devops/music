@@ -1,0 +1,104 @@
+name: Build SoundCargo
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: SoundCargo.exe
+            archive: SoundCargo-windows-x86_64.zip
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: SoundCargo
+            archive: SoundCargo-linux-x86_64.tar.gz
+          - name: macos-x86_64
+            os: macos-13
+            target: x86_64-apple-darwin
+            binary: SoundCargo
+            archive: SoundCargo-macos-x86_64.tar.gz
+          - name: macos-aarch64
+            os: macos-14
+            target: aarch64-apple-darwin
+            binary: SoundCargo
+            archive: SoundCargo-macos-aarch64.tar.gz
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Linux audio dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes libasound2-dev pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package Windows build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $package = "package"
+          New-Item -ItemType Directory -Force "$package/data" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$package/${{ matrix.binary }}"
+          Copy-Item README.md "$package/README.md"
+          New-Item -ItemType File -Force "$package/data/.gitkeep" | Out-Null
+          Compress-Archive -Path "$package/*" -DestinationPath "${{ matrix.archive }}" -Force
+
+      - name: Package Unix build
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p package/data
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" package/
+          cp README.md package/
+          touch package/data/.gitkeep
+          tar -czf "${{ matrix.archive }}" -C package .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SoundCargo-${{ matrix.name }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packaged builds
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: SoundCargo-*
+          merge-multiple: true
+
+      - name: Create release and upload packages
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*
