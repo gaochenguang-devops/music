@@ -60,6 +60,8 @@ LRC 支持 `[mm:ss]`、`[mm:ss.xx]`、同一行多个时间标签，以及 `ti/a
 
 项目同时提供无桌面窗口的 `soundcargo-server` 服务端程序。它复用 `rodio`、播放列表和 LRC 核心，扫描当前目录下的 `data` 音乐库，并通过浏览器远程控制服务器音频输出。
 
+Ubuntu Server、无桌面环境或没有系统托盘的机器请运行 `soundcargo-server`，不要启动桌面版 `SoundCargo`。桌面版需要 X11/Wayland、GTK 和系统音频输出；无有效 GTK 显示环境时会自动跳过系统托盘。
+
 ```bash
 cargo run --release --bin soundcargo-server
 ```

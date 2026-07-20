@@ -11,6 +11,7 @@ dependencies = [
  "directories",
  "eframe",
  "egui",
+ "gtk",
  "id3",
  "image",
  "rand 0.9.5",

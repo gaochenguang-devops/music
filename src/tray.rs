@@ -15,6 +15,13 @@ pub enum TrayCommand {
 /// Creates the native tray icon and forwards native callbacks to the UI thread.
 pub fn create(ctx: &Context) -> (Option<TrayIcon>, Receiver<TrayCommand>) {
     let (sender, receiver) = mpsc::channel();
+    #[cfg(target_os = "linux")]
+    if gtk::init().is_err() {
+        // Headless Linux servers do not have a GTK display. The server binary
+        // does not call this function, while the desktop app can still start
+        // without a tray icon instead of panicking inside tray-icon.
+        return (None, receiver);
+    }
     let menu = Menu::new();
     let show_item = MenuItem::new("显示 SoundCargo", true, None);
     let exit_item = MenuItem::new("退出 SoundCargo", true, None);
