@@ -14,18 +14,20 @@ use std::{
 
 use axum::{
     Json, Router,
+    body::Body,
     extract::{
         Path, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
     http::StatusCode,
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use rand::prelude::IndexedRandom;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
-use tower_http::trace::TraceLayer;
+use tower::ServiceExt;
+use tower_http::{services::ServeFile, trace::TraceLayer};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use SoundCargo::{
@@ -93,12 +95,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     tracing::info!(tracks = playlist.tracks.len(), "music library loaded");
 
-    let mut audio = AudioController::spawn();
-    let events = audio.take_events();
+    let mut audio_controller = AudioController::spawn();
+    let events = audio_controller.take_events();
     let (updates, _) = broadcast::channel(32);
     let state = AppState {
         inner: Arc::new(Inner {
-            commands: audio.commands.clone(),
+            commands: audio_controller.commands.clone(),
             playlist: Mutex::new(playlist),
             position: Mutex::new(Duration::ZERO),
             playing: Mutex::new(false),
@@ -116,6 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/state", get(state_snapshot))
         .route("/api/library", get(state_snapshot))
         .route("/api/lyrics/{index}", get(lyrics))
+        .route("/api/audio/{index}", get(audio))
         .route("/api/events", get(events_ws))
         .route("/api/player/play", post(play))
         .route("/api/player/pause", post(pause))
@@ -134,7 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address: SocketAddr = bind.parse()?;
     tracing::info!(%address, "SoundCargo server listening");
     axum::serve(tokio::net::TcpListener::bind(address).await?, app).await?;
-    drop(audio);
+    drop(audio_controller);
     Ok(())
 }
 
@@ -280,6 +283,31 @@ async fn lyrics(
     Lyrics::from_file(&path)
         .map(Json)
         .map_err(|error| ApiError::bad_request(error.to_string()))
+}
+
+/// Streams an MP3 from the server's data directory to a browser `<audio>`
+/// element. ServeFile handles range requests so browser seeking works.
+async fn audio(
+    Path(index): Path<usize>,
+    State(state): State<AppState>,
+    request: axum::http::Request<Body>,
+) -> Response {
+    let path = state
+        .inner
+        .playlist
+        .lock()
+        .unwrap()
+        .tracks
+        .get(index)
+        .map(|track| track.path.clone());
+    let Some(path) = path else {
+        return (StatusCode::NOT_FOUND, "歌曲不存在").into_response();
+    };
+    tracing::info!(index, path = %path.display(), "serving audio stream");
+    match ServeFile::new(path).oneshot(request).await {
+        Ok(response) => response.map(Body::new),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
 }
 
 async fn events_ws(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
