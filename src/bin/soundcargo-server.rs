@@ -9,7 +9,7 @@ use std::{
     net::SocketAddr,
     sync::{Arc, Mutex, mpsc::Receiver},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -135,7 +135,9 @@ fn spawn_event_bridge(events: Receiver<PlayerEvent>, state: AppState) {
     thread::Builder::new()
         .name("soundcargo-server-events".into())
         .spawn(move || {
+            let mut last_position_push = Instant::now() - Duration::from_secs(1);
             while let Ok(event) = events.recv() {
+                let immediate = !matches!(event, PlayerEvent::Position(_));
                 match event {
                     PlayerEvent::Position(position) => {
                         *state.inner.position.lock().unwrap() = position
@@ -147,7 +149,10 @@ fn spawn_event_bridge(events: Receiver<PlayerEvent>, state: AppState) {
                         *state.inner.last_error.lock().unwrap() = Some(error)
                     }
                 }
-                let _ = state.inner.updates.send(snapshot(&state));
+                if immediate || last_position_push.elapsed() >= Duration::from_millis(200) {
+                    last_position_push = Instant::now();
+                    let _ = state.inner.updates.send(snapshot(&state));
+                }
             }
         })
         .expect("failed to create server event thread");

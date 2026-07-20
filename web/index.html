@@ -3,38 +3,54 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SoundCargo Server</title>
+  <title>SoundCargo Remote</title>
   <style>
-    :root { color-scheme: light; font-family: system-ui, sans-serif; background:#e8eff2; color:#19252f; }
-    body { max-width: 980px; margin: 0 auto; padding: 28px; }
-    main { display:grid; grid-template-columns: 1fr 300px; gap:18px; }
-    section { background:#fafcfd; border:1px solid #d6e1e6; border-radius:14px; padding:20px; box-shadow:0 4px 18px #142b3918; }
-    h1 { margin:0 0 20px; font-size:25px; } h2 { margin:0 0 12px; font-size:18px; }
-    button, input, select { border:1px solid #bcdee1; border-radius:17px; background:#e8f6f7; padding:9px 14px; color:#19252f; }
-    button { cursor:pointer; } button:hover { background:#d3eff0; } .primary { background:#0eb3c5; color:white; }
-    .controls { display:flex; flex-wrap:wrap; gap:8px; margin:16px 0; }
-    .track { display:flex; justify-content:space-between; gap:10px; padding:10px; border-radius:8px; cursor:pointer; }
-    .track:hover, .track.active { background:#def7f6; } .muted { color:#70808b; font-size:13px; }
-    #lyrics { min-height:260px; white-space:pre-wrap; line-height:1.8; } #error { color:#b44b55; }
-    @media (max-width: 760px) { body{padding:14px} main{grid-template-columns:1fr} }
+    :root { color-scheme: light; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background:#e8eff2; color:#19252f; }
+    * { box-sizing:border-box; }
+    body { max-width:1180px; margin:0 auto; padding:28px; }
+    header { display:flex; align-items:end; justify-content:space-between; margin-bottom:22px; }
+    .brand { display:flex; align-items:center; gap:12px; } .brand-mark { width:42px; height:42px; border-radius:13px; background:#0eb3c5; color:white; display:grid; place-items:center; font-size:21px; box-shadow:0 7px 18px #0eb3c533; }
+    h1 { margin:0; font-size:27px; letter-spacing:.2px; } h2 { margin:0; font-size:18px; } p { margin:0; }
+    .status { display:flex; align-items:center; gap:7px; color:#70808b; font-size:13px; } .status-dot { width:8px; height:8px; border-radius:50%; background:#9eabb2; } .status-dot.live { background:#0eb3c5; box-shadow:0 0 0 4px #def7f6; }
+    main { display:grid; grid-template-columns:minmax(0,1fr) 350px; gap:18px; }
+    section { background:#fafcfd; border:1px solid #d6e1e6; border-radius:16px; box-shadow:0 5px 20px #142b3914; }
+    .player { padding:24px; min-height:520px; display:flex; flex-direction:column; }
+    .eyebrow { color:#0b8e9e; font-size:12px; font-weight:700; letter-spacing:1.2px; text-transform:uppercase; }
+    .now { display:flex; align-items:center; gap:18px; margin:10px 0 24px; } .cover { width:94px; height:94px; border-radius:22px; background:#def7f6; display:grid; place-items:center; color:#0eb3c5; font-size:42px; box-shadow:inset 0 0 0 1px #bcdfe1; }
+    .now h2 { font-size:26px; margin-bottom:7px; } .muted { color:#70808b; font-size:13px; }
+    .transport { display:flex; align-items:center; gap:9px; margin:4px 0 22px; } button, select { border:1px solid #bcdee1; border-radius:18px; background:#e8f6f7; padding:9px 14px; color:#19252f; font:inherit; cursor:pointer; transition:background .15s, transform .15s; } button:hover, select:hover { background:#d3eff0; transform:translateY(-1px); } button:active { transform:translateY(0); } button.primary { background:#0eb3c5; border-color:#0eb3c5; color:white; padding-inline:20px; } button.primary:hover { background:#0b9eaf; }
+    .progress-wrap { margin-top:auto; } .time-row { display:flex; justify-content:space-between; color:#70808b; font:12px ui-monospace, monospace; margin-bottom:7px; }
+    input[type=range] { width:100%; accent-color:#0eb3c5; cursor:pointer; } .settings { display:flex; flex-wrap:wrap; gap:10px; margin-top:18px; align-items:center; } .settings label { display:flex; align-items:center; gap:7px; color:#70808b; font-size:13px; } .settings input[type=range] { width:100px; }
+    .lyrics { margin-top:24px; padding-top:18px; border-top:1px solid #d6e1e6; } .lyrics h2 { margin-bottom:10px; } #lyrics { min-height:72px; white-space:pre-wrap; line-height:1.8; color:#506874; }
+    .library { padding:20px; display:flex; flex-direction:column; min-height:520px; } .library-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; } .count { color:#70808b; font-size:12px; }
+    #tracks { overflow:auto; max-height:650px; padding-right:3px; } .track { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 10px; border-radius:10px; cursor:pointer; border:1px solid transparent; } .track:hover { background:#f0f8f8; } .track.active { background:#def7f6; border-color:#bcdfe1; } .track-main { min-width:0; } .track-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; font-weight:650; } .track-artist { color:#70808b; font-size:12px; margin-top:4px; } .track-duration { color:#70808b; font:12px ui-monospace, monospace; }
+    #error { color:#b44b55; min-height:18px; margin-top:10px; font-size:13px; } .empty { padding:28px 8px; color:#70808b; text-align:center; }
+    @media (max-width:820px) { body{padding:16px} header{align-items:start; gap:12px; flex-direction:column} main{grid-template-columns:1fr} .player,.library{min-height:0} .transport{flex-wrap:wrap} }
   </style>
 </head>
 <body>
-  <h1>SoundCargo <span class="muted">远程播放器</span></h1>
+  <header><div class="brand"><div class="brand-mark">♫</div><div><h1>SoundCargo</h1><div class="muted">远程音乐控制台</div></div></div><div class="status"><i id="status-dot" class="status-dot"></i><span id="connection">连接中</span></div></header>
   <main>
-    <section><h2 id="now">等待播放</h2><div id="meta" class="muted">服务器音乐库</div>
-      <div class="controls"><button onclick="call('previous')">上一曲</button><button class="primary" onclick="call('play')">播放</button><button onclick="call('pause')">暂停</button><button onclick="call('stop')">停止</button><button onclick="call('next')">下一曲</button></div>
-      <input id="seek" type="range" min="0" max="0" value="0" step="0.1" style="width:100%" onchange="post('/api/player/seek',{value:+this.value})">
-      <div class="controls"><label>音量 <input id="volume" type="range" min="0" max="1" step="0.01" value="0.75" onchange="post('/api/player/volume',{value:+this.value})"></label><label>倍速 <select id="speed" onchange="post('/api/player/speed',{value:+this.value})"><option>0.5</option><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option></select></label><select id="mode" onchange="post('/api/player/mode',{value:this.value})"><option value="Sequential">顺序播放</option><option value="RepeatOne">单曲循环</option><option value="RepeatAll">列表循环</option><option value="Shuffle">随机播放</option></select></div>
-      <p id="error"></p><h2>歌词</h2><div id="lyrics" class="muted">暂无歌词</div>
+    <section class="player">
+      <div class="eyebrow">Now playing</div>
+      <div class="now"><div class="cover">♫</div><div><h2 id="now">等待播放</h2><p id="meta" class="muted">服务器音乐库</p></div></div>
+      <div class="transport"><button onclick="call('previous')">⏮ 上一曲</button><button class="primary" id="play" onclick="call('play')">▶ 播放</button><button onclick="call('pause')">暂停</button><button onclick="call('stop')">停止</button><button onclick="call('next')">下一曲 ⏭</button></div>
+      <div class="progress-wrap"><div class="time-row"><span id="elapsed">00:00</span><span id="total">00:00</span></div><input id="seek" type="range" min="0" max="0" value="0" step="0.1"></div>
+      <div class="settings"><label>音量 <input id="volume" type="range" min="0" max="1" step="0.01" value=".75"></label><label>倍速 <select id="speed"><option value=".5">0.5×</option><option value=".75">0.75×</option><option value="1" selected>1.0×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2.0×</option></select></label><select id="mode"><option value="Sequential">顺序播放</option><option value="RepeatOne">单曲循环</option><option value="RepeatAll">列表循环</option><option value="Shuffle">随机播放</option></select></div>
+      <div id="error"></div><div class="lyrics"><h2>歌词</h2><div id="lyrics">暂无歌词</div></div>
     </section>
-    <section><h2>播放列表</h2><div id="tracks" class="muted">加载中...</div></section>
+    <section class="library"><div class="library-head"><h2>播放列表</h2><span id="count" class="count">0 首歌曲</span></div><div id="tracks"><div class="empty">正在加载音乐库...</div></div></section>
   </main>
   <script>
-    let state;
-    async function post(url, body) { const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:body?JSON.stringify(body):'{}'}); if(r.ok) render(await r.json()); }
-    async function call(action) { await post('/api/player/'+action); }
-    async function render(s) { state=s; const t=s.current==null?null:s.tracks[s.current]; document.querySelector('#now').textContent=t?t.title:'等待播放'; document.querySelector('#meta').textContent=t?`${t.artist} · ${t.album}`:'服务器音乐库'; document.querySelector('#volume').value=s.volume; document.querySelector('#speed').value=s.speed; document.querySelector('#mode').value=s.mode; document.querySelector('#error').textContent=s.error||''; const tracks=document.querySelector('#tracks'); tracks.innerHTML=''; s.tracks.forEach(x=>{const e=document.createElement('div');e.className='track '+(x.index===s.current?'active':'');e.innerHTML=`<span>${x.title}<small class="muted"><br>${x.artist}</small></span><span class="muted">${Math.floor(x.duration_ms/60000)}:${String(Math.floor(x.duration_ms/1000)%60).padStart(2,'0')}</span>`;e.onclick=()=>post('/api/player/track/'+x.index);tracks.append(e)}); const l=s.current==null?null:await fetch('/api/lyrics/'+s.current); if(l&&l.ok){const lyric=await l.json();document.querySelector('#lyrics').textContent=lyric.lines.map(x=>x.text).join('\n')} }
-    fetch('/api/state').then(r=>r.json()).then(render); const ws=new WebSocket(`ws://${location.host}/api/events`); ws.onmessage=e=>render(JSON.parse(e.data));
+    let state=null, lastCurrent=null, trackSignature='', lyricRequest=0, seeking=false, lastServerPosition=0, lastServerAt=0;
+    const $=id=>document.getElementById(id);
+    const fmt=ms=>{const s=Math.max(0,Math.floor(ms/1000));return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`};
+    async function post(url,body){const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:body?JSON.stringify(body):'{}'});if(r.ok)render(await r.json());}
+    async function call(action){await post('/api/player/'+action);}
+    function renderTracks(s){const root=$('tracks');root.replaceChildren();$('count').textContent=`${s.tracks.length} 首歌曲`;if(!s.tracks.length){root.innerHTML='<div class="empty">data 目录中暂无 MP3</div>';return}const frag=document.createDocumentFragment();s.tracks.forEach(x=>{const e=document.createElement('div');e.className='track '+(x.index===s.current?'active':'');e.dataset.index=x.index;const main=document.createElement('div');main.className='track-main';const title=document.createElement('div');title.className='track-title';title.textContent=x.title;const artist=document.createElement('div');artist.className='track-artist';artist.textContent=x.artist;main.append(title,artist);const duration=document.createElement('span');duration.className='track-duration';duration.textContent=fmt(x.duration_ms);e.append(main,duration);e.onclick=()=>post('/api/player/track/'+x.index);frag.append(e)});root.append(frag)}
+    async function loadLyrics(index){const token=++lyricRequest;if(index==null){$('lyrics').textContent='暂无歌词';return}try{const r=await fetch('/api/lyrics/'+index);if(token!==lyricRequest)return;$('lyrics').textContent=r.ok?(await r.json()).lines.map(x=>x.text).join('\n'):'暂无歌词'}catch{if(token===lyricRequest)$('lyrics').textContent='歌词加载失败'}}
+    function render(s){const oldCurrent=lastCurrent;state=s;lastServerPosition=Number(s.position_ms);lastServerAt=performance.now();const t=s.current==null?null:s.tracks[s.current];$('now').textContent=t?t.title:'等待播放';$('meta').textContent=t?`${t.artist} · ${t.album}`:'服务器音乐库';$('play').textContent=s.playing?'⏸ 暂停':'▶ 播放';$('volume').value=s.volume;$('speed').value=s.speed;$('mode').value=s.mode;$('error').textContent=s.error||'';if(trackSignature!==s.tracks.map(x=>x.index+':'+x.title).join('|')){trackSignature=s.tracks.map(x=>x.index+':'+x.title).join('|');renderTracks(s)}else if(oldCurrent!==s.current){document.querySelectorAll('.track').forEach(e=>e.classList.toggle('active',+e.dataset.index===s.current))}const current=t?t.duration_ms:0;$('seek').max=current/1000;$('total').textContent=fmt(current);if(!seeking){$('seek').value=lastServerPosition/1000;$('elapsed').textContent=fmt(lastServerPosition)}if(oldCurrent!==s.current){lastCurrent=s.current;loadLyrics(s.current)}}
+    $('seek').oninput=()=>{seeking=true;$('elapsed').textContent=fmt(+$('seek').value*1000)};$('seek').onchange=()=>{seeking=false;post('/api/player/seek',{value:+$('seek').value)} };$('volume').onchange=()=>post('/api/player/volume',{value:+$('volume').value});$('speed').onchange=()=>post('/api/player/speed',{value:+$('speed').value});$('mode').onchange=()=>post('/api/player/mode',{value:$('mode').value});
+    function connect(){const ws=new WebSocket(`ws://${location.host}/api/events`);ws.onopen=()=>{$('connection').textContent='实时连接';$('status-dot').classList.add('live')};ws.onclose=()=>{ $('connection').textContent='连接断开';$('status-dot').classList.remove('live');setTimeout(connect,2000)};ws.onmessage=e=>render(JSON.parse(e.data))}fetch('/api/state').then(r=>r.json()).then(render);connect();setInterval(()=>{if(state?.playing&&!seeking){const now=lastServerPosition+(performance.now()-lastServerAt);$('seek').value=now/1000;$('elapsed').textContent=fmt(now)}},250);
   </script>
 </body></html>
