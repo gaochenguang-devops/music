@@ -58,7 +58,7 @@ LRC 支持 `[mm:ss]`、`[mm:ss.xx]`、同一行多个时间标签，以及 `ti/a
 
 ## Web 服务端
 
-项目同时提供无桌面窗口的 `soundcargo-server` 服务端程序。它复用 `rodio`、播放列表和 LRC 核心，扫描当前目录下的 `data` 音乐库，并通过浏览器远程控制服务器音频输出。
+项目同时提供无桌面窗口的 `soundcargo-server` 服务端程序。它扫描当前目录下的 `data` 音乐库，提供 Web 页面、播放列表、LRC 歌词和 MP3 流式传输；声音由浏览器 `<audio>` 播放，服务端不会初始化 `rodio`，也不会获取或占用服务器音频输出设备。
 
 Ubuntu Server、无桌面环境或没有系统托盘的机器请运行 `soundcargo-server`，不要启动桌面版 `SoundCargo`。桌面版需要 X11/Wayland、GTK 和系统音频输出；无有效 GTK 显示环境时会自动跳过系统托盘。
 
@@ -72,7 +72,7 @@ cargo run --release --bin soundcargo-server
 SOUNDCARGO_BIND=127.0.0.1:8787 ./soundcargo-server
 ```
 
-服务端提供播放列表、播放/暂停/停止、上一曲/下一曲、进度、音量、倍速、播放模式、歌词和 WebSocket 实时状态。Linux 无桌面服务器仍需要 ALSA/PulseAudio/PipeWire 音频输出设备；浏览器负责远程控制，声音由服务器输出。
+服务端提供播放列表、播放/暂停/停止、上一曲/下一曲、进度、音量、倍速、播放模式、歌词和 WebSocket 实时状态。Linux 无桌面服务器不需要 ALSA/PulseAudio/PipeWire 音频输出设备；浏览器负责实际播放和进度上报，服务器只维护共享播放状态并按需提供音频文件 Range 流。
 
 详细数据流和设计取舍见 [`docs/architecture.md`](docs/architecture.md)。
 

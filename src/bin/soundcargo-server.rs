@@ -1,15 +1,14 @@
 //! Headless HTTP/WebSocket controller for the SoundCargo player.
 //!
-//! The server shares the desktop player's rodio thread and scans `data/` in
-//! the current working directory. Audio is rendered by the server machine;
-//! browsers act as remote controllers and lyric/status displays.
+//! The server scans `data/` in the current working directory and streams MP3
+//! files to browsers. It deliberately does not initialize rodio or enumerate
+//! host audio devices, so it can run on Ubuntu Server without ALSA hardware.
 
 use std::{
     env,
     net::SocketAddr,
-    sync::{Arc, Mutex, mpsc::Receiver},
-    thread,
-    time::{Duration, Instant},
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use axum::{
@@ -32,7 +31,6 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use SoundCargo::{
     lrc::Lyrics,
-    player::{AudioController, PlayerCommand, PlayerEvent},
     playlist::{PlayMode, Playlist, Track},
 };
 
@@ -44,7 +42,6 @@ struct AppState {
 }
 
 struct Inner {
-    commands: std::sync::mpsc::Sender<PlayerCommand>,
     playlist: Mutex<Playlist>,
     position: Mutex<Duration>,
     playing: Mutex<bool>,
@@ -81,6 +78,11 @@ struct ValueRequest<T> {
     value: T,
 }
 
+#[derive(Debug, Deserialize)]
+struct PositionRequest {
+    position: f64,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _log_guard = init_logging()?;
@@ -95,12 +97,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     tracing::info!(tracks = playlist.tracks.len(), "music library loaded");
 
-    let mut audio_controller = AudioController::spawn();
-    let events = audio_controller.take_events();
     let (updates, _) = broadcast::channel(32);
     let state = AppState {
         inner: Arc::new(Inner {
-            commands: audio_controller.commands.clone(),
             playlist: Mutex::new(playlist),
             position: Mutex::new(Duration::ZERO),
             playing: Mutex::new(false),
@@ -111,7 +110,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             updates,
         }),
     };
-    spawn_event_bridge(events, state.clone());
 
     let app = Router::new()
         .route("/", get(index))
@@ -125,8 +123,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/player/stop", post(stop))
         .route("/api/player/next", post(next))
         .route("/api/player/previous", post(previous))
+        .route("/api/player/ended", post(ended))
         .route("/api/player/track/{index}", post(select_track))
         .route("/api/player/seek", post(seek))
+        .route("/api/player/position", post(position))
         .route("/api/player/volume", post(volume))
         .route("/api/player/speed", post(speed))
         .route("/api/player/mode", post(mode))
@@ -137,7 +137,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address: SocketAddr = bind.parse()?;
     tracing::info!(%address, "SoundCargo server listening");
     axum::serve(tokio::net::TcpListener::bind(address).await?, app).await?;
-    drop(audio_controller);
     Ok(())
 }
 
@@ -160,42 +159,10 @@ fn init_logging() -> Result<tracing_appender::non_blocking::WorkerGuard, Box<dyn
     Ok(guard)
 }
 
-fn spawn_event_bridge(events: Receiver<PlayerEvent>, state: AppState) {
-    thread::Builder::new()
-        .name("soundcargo-server-events".into())
-        .spawn(move || {
-            let mut last_position_push = Instant::now() - Duration::from_secs(1);
-            while let Ok(event) = events.recv() {
-                let immediate = !matches!(event, PlayerEvent::Position(_));
-                match event {
-                    PlayerEvent::Position(position) => {
-                        *state.inner.position.lock().unwrap() = position
-                    }
-                    PlayerEvent::Playing(playing) => *state.inner.playing.lock().unwrap() = playing,
-                    PlayerEvent::Finished => {
-                        if !advance_after_finish(&state) {
-                            *state.inner.playing.lock().unwrap() = false;
-                        }
-                    }
-                    PlayerEvent::Devices { .. } => {}
-                    PlayerEvent::Error(error) => {
-                        tracing::error!(message = %error, "audio thread error");
-                        *state.inner.last_error.lock().unwrap() = Some(error)
-                    }
-                }
-                if immediate || last_position_push.elapsed() >= Duration::from_millis(200) {
-                    last_position_push = Instant::now();
-                    let _ = state.inner.updates.send(snapshot(&state));
-                }
-            }
-        })
-        .expect("failed to create server event thread");
-}
-
-/// Selects the next track when the audio thread reports end-of-file.
+/// Selects the next track when the browser reports end-of-file.
 /// Returns false when sequential mode reaches the end of the list.
 fn advance_after_finish(state: &AppState) -> bool {
-    let (index, path) = {
+    let index = {
         let mut playlist = state.inner.playlist.lock().unwrap();
         let len = playlist.tracks.len();
         if len == 0 {
@@ -215,20 +182,9 @@ fn advance_after_finish(state: &AppState) -> bool {
             PlayMode::Sequential => return false,
         };
         playlist.current = Some(next);
-        (next, playlist.tracks[next].path.clone())
+        next
     };
     tracing::info!(index, "advancing after track finished");
-    if state
-        .inner
-        .commands
-        .send(PlayerCommand::Load {
-            path,
-            autoplay: true,
-        })
-        .is_err()
-    {
-        return false;
-    }
     *state.inner.position.lock().unwrap() = Duration::ZERO;
     *state.inner.playing.lock().unwrap() = true;
     true
@@ -333,48 +289,39 @@ async fn websocket(mut socket: WebSocket, state: AppState) {
 }
 
 async fn play(State(state): State<AppState>) -> Result<Json<PlaybackSnapshot>, ApiError> {
-    let (index, already_loaded) = {
+    let index = {
         let mut playlist = state.inner.playlist.lock().unwrap();
-        let already_loaded = playlist.current.is_some();
-        if !already_loaded {
+        if playlist.current.is_none() {
             playlist.current = (!playlist.tracks.is_empty()).then_some(0);
         }
-        (playlist.current, already_loaded)
+        playlist.current
     };
     if let Some(index) = index {
-        if already_loaded {
-            tracing::info!("resuming current track");
-            state
-                .inner
-                .commands
-                .send(PlayerCommand::Play)
-                .map_err(ApiError::send)?;
-        } else {
-            let path = state.inner.playlist.lock().unwrap().tracks[index]
-                .path
-                .clone();
-            state
-                .inner
-                .commands
-                .send(PlayerCommand::Load {
-                    path,
-                    autoplay: true,
-                })
-                .map_err(ApiError::send)?;
-        }
+        tracing::info!(index, "browser playback requested");
         *state.inner.playing.lock().unwrap() = true;
-        Ok(Json(snapshot(&state)))
+        Ok(broadcast_snapshot(&state))
     } else {
         Err(ApiError::bad_request("播放列表为空"))
     }
 }
 
-async fn pause(State(state): State<AppState>) -> Result<Json<PlaybackSnapshot>, ApiError> {
-    command(&state, PlayerCommand::Pause)
+async fn pause(
+    State(state): State<AppState>,
+    body: Option<Json<PositionRequest>>,
+) -> Result<Json<PlaybackSnapshot>, ApiError> {
+    if let Some(Json(input)) = body {
+        set_position(&state, input.position)?;
+    }
+    tracing::info!("browser playback paused");
+    *state.inner.playing.lock().unwrap() = false;
+    Ok(broadcast_snapshot(&state))
 }
 
 async fn stop(State(state): State<AppState>) -> Result<Json<PlaybackSnapshot>, ApiError> {
-    command(&state, PlayerCommand::Stop)
+    tracing::info!("browser playback stopped");
+    *state.inner.playing.lock().unwrap() = false;
+    *state.inner.position.lock().unwrap() = Duration::ZERO;
+    Ok(broadcast_snapshot(&state))
 }
 
 async fn next(State(state): State<AppState>) -> Result<Json<PlaybackSnapshot>, ApiError> {
@@ -383,6 +330,14 @@ async fn next(State(state): State<AppState>) -> Result<Json<PlaybackSnapshot>, A
 
 async fn previous(State(state): State<AppState>) -> Result<Json<PlaybackSnapshot>, ApiError> {
     select_relative(&state, -1).await
+}
+
+async fn ended(State(state): State<AppState>) -> Result<Json<PlaybackSnapshot>, ApiError> {
+    tracing::info!("browser reported track ended");
+    if !advance_after_finish(&state) {
+        *state.inner.playing.lock().unwrap() = false;
+    }
+    Ok(broadcast_snapshot(&state))
 }
 
 async fn select_track(
@@ -413,38 +368,35 @@ fn load_index(
     index: usize,
     autoplay: bool,
 ) -> Result<Json<PlaybackSnapshot>, ApiError> {
-    let path = {
+    {
         let mut playlist = state.inner.playlist.lock().unwrap();
-        let track = playlist
+        playlist
             .tracks
             .get(index)
             .ok_or_else(|| ApiError::not_found("歌曲不存在"))?;
-        let path = track.path.clone();
         playlist.current = Some(index);
-        path
-    };
-    tracing::info!(index, autoplay, path = %path.display(), "loading track");
-    state
-        .inner
-        .commands
-        .send(PlayerCommand::Load { path, autoplay })
-        .map_err(ApiError::send)?;
+    }
+    tracing::info!(index, autoplay, "selecting browser track");
     *state.inner.playing.lock().unwrap() = autoplay;
     *state.inner.position.lock().unwrap() = Duration::ZERO;
-    Ok(Json(snapshot(state)))
+    Ok(broadcast_snapshot(state))
 }
 
 async fn seek(
     State(state): State<AppState>,
     Json(input): Json<ValueRequest<f64>>,
 ) -> Result<Json<PlaybackSnapshot>, ApiError> {
-    if !input.value.is_finite() || input.value < 0.0 {
-        return Err(ApiError::bad_request("无效的跳转时间"));
-    }
-    command(
-        &state,
-        PlayerCommand::Seek(Duration::from_secs_f64(input.value)),
-    )
+    set_position(&state, input.value)?;
+    tracing::info!(position = input.value, "browser seek requested");
+    Ok(broadcast_snapshot(&state))
+}
+
+async fn position(
+    State(state): State<AppState>,
+    Json(input): Json<PositionRequest>,
+) -> Result<Json<PlaybackSnapshot>, ApiError> {
+    set_position(&state, input.position)?;
+    Ok(broadcast_snapshot(&state))
 }
 
 async fn volume(
@@ -452,8 +404,9 @@ async fn volume(
     Json(input): Json<ValueRequest<f32>>,
 ) -> Result<Json<PlaybackSnapshot>, ApiError> {
     let value = input.value.clamp(0.0, 1.0);
+    tracing::info!(volume = value, "changing browser volume");
     *state.inner.volume.lock().unwrap() = value;
-    command(&state, PlayerCommand::SetVolume(value))
+    Ok(broadcast_snapshot(&state))
 }
 
 async fn speed(
@@ -461,8 +414,9 @@ async fn speed(
     Json(input): Json<ValueRequest<f32>>,
 ) -> Result<Json<PlaybackSnapshot>, ApiError> {
     let value = input.value.clamp(0.5, 2.0);
+    tracing::info!(speed = value, "changing browser playback speed");
     *state.inner.speed.lock().unwrap() = value;
-    command(&state, PlayerCommand::SetSpeed(value))
+    Ok(broadcast_snapshot(&state))
 }
 
 async fn mode(
@@ -471,13 +425,21 @@ async fn mode(
 ) -> Result<Json<PlaybackSnapshot>, ApiError> {
     tracing::info!(mode = ?input.value, "changing play mode");
     *state.inner.mode.lock().unwrap() = input.value;
-    Ok(Json(snapshot(&state)))
+    Ok(broadcast_snapshot(&state))
 }
 
-fn command(state: &AppState, command: PlayerCommand) -> Result<Json<PlaybackSnapshot>, ApiError> {
-    tracing::info!(command = ?command, "sending player command");
-    state.inner.commands.send(command).map_err(ApiError::send)?;
-    Ok(Json(snapshot(state)))
+fn set_position(state: &AppState, seconds: f64) -> Result<(), ApiError> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(ApiError::bad_request("无效的播放时间"));
+    }
+    *state.inner.position.lock().unwrap() = Duration::from_secs_f64(seconds);
+    Ok(())
+}
+
+fn broadcast_snapshot(state: &AppState) -> Json<PlaybackSnapshot> {
+    let snapshot = snapshot(state);
+    let _ = state.inner.updates.send(snapshot.clone());
+    Json(snapshot)
 }
 
 #[derive(Debug)]
@@ -489,9 +451,6 @@ impl ApiError {
     }
     fn not_found(message: impl Into<String>) -> Self {
         Self(StatusCode::NOT_FOUND, message.into())
-    }
-    fn send(error: std::sync::mpsc::SendError<PlayerCommand>) -> Self {
-        Self(StatusCode::SERVICE_UNAVAILABLE, error.to_string())
     }
 }
 
