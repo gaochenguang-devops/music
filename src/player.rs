@@ -97,11 +97,6 @@ impl Default for AudioState {
 
 fn audio_thread(commands: Receiver<PlayerCommand>, events: Sender<PlayerEvent>) {
     let mut state = AudioState::default();
-    if let Err(err) = open_output(&mut state, None) {
-        let _ = events.send(PlayerEvent::Error(err));
-    }
-    send_devices(&events, state.selected_device.clone());
-
     loop {
         match commands.recv_timeout(Duration::from_millis(75)) {
             Ok(PlayerCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -187,6 +182,9 @@ fn handle_command(command: PlayerCommand, state: &mut AudioState, events: &Sende
 }
 
 fn load_track(state: &mut AudioState, path: PathBuf, autoplay: bool) -> Result<(), String> {
+    if state.stream.is_none() {
+        open_output(state, state.selected_device.clone())?;
+    }
     let stream = state
         .stream
         .as_ref()
@@ -210,6 +208,10 @@ fn load_track(state: &mut AudioState, path: PathBuf, autoplay: bool) -> Result<(
 }
 
 fn switch_device(state: &mut AudioState, name: Option<String>) -> Result<(), String> {
+    if state.stream.is_none() && state.player.is_none() && state.path.is_none() {
+        state.selected_device = name;
+        return Ok(());
+    }
     let position = state
         .player
         .as_ref()

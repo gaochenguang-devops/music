@@ -1,6 +1,8 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::mpsc::{self, Receiver},
+    thread,
     time::Duration,
 };
 
@@ -15,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     lrc::Lyrics,
     player::{AudioController, PlayerCommand, PlayerEvent},
-    playlist::{PlayMode, Playlist, Track},
+    playlist::{PlayMode, Playlist, Track, read_cover},
     tray::{self, TrayCommand},
     utils::format_duration,
 };
@@ -88,9 +90,16 @@ impl AppConfig {
     }
 }
 
+struct LibraryLoadResult {
+    playlist: Playlist,
+    errors: Vec<String>,
+}
+
 pub struct MusicApp {
     audio: AudioController,
     playlist: Playlist,
+    library_rx: Option<Receiver<LibraryLoadResult>>,
+    library_loading: bool,
     lyrics: Lyrics,
     position: Duration,
     is_playing: bool,
@@ -119,7 +128,7 @@ impl MusicApp {
         configure_style(&cc.egui_ctx);
         let config = AppConfig::load();
         let audio = AudioController::spawn();
-        let (_tray_icon, tray_commands) = tray::create(&cc.egui_ctx);
+        let (_tray_sender, tray_commands) = mpsc::channel();
         let _ = audio.commands.send(PlayerCommand::SetVolume(config.volume));
         let _ = audio.commands.send(PlayerCommand::SetSpeed(config.speed));
         if config.device.is_some() {
@@ -127,9 +136,12 @@ impl MusicApp {
                 .commands
                 .send(PlayerCommand::SwitchDevice(config.device.clone()));
         }
-        let mut app = Self {
+        let library_rx = spawn_library_loader(music_data_dir(), cc.egui_ctx.clone());
+        Self {
             audio,
             playlist: Playlist::default(),
+            library_rx: Some(library_rx),
+            library_loading: true,
             lyrics: Lyrics::default(),
             position: Duration::ZERO,
             is_playing: false,
@@ -146,27 +158,50 @@ impl MusicApp {
             scroll_to_lyric: None,
             playlist_open: config.playlist_open,
             tray_commands,
-            _tray_icon,
+            _tray_icon: None,
             close_prompt: false,
             close_to_tray: true,
             allow_close: false,
-        };
-
-        let data_dir = music_data_dir();
-        if let Err(err) = fs::create_dir_all(&data_dir) {
-            app.report_errors(vec![format!(
-                "无法创建音乐数据目录 {}：{err}",
-                data_dir.display()
-            )]);
-        } else {
-            let errors = app.playlist.add_folder(&data_dir);
-            app.report_errors(errors);
         }
-        app
     }
 
     fn command(&self, command: PlayerCommand) {
         let _ = self.audio.commands.send(command);
+    }
+
+    fn ensure_tray(&mut self, ctx: &egui::Context) -> bool {
+        if self._tray_icon.is_some() {
+            return true;
+        }
+        let (tray_icon, tray_commands) = tray::create(ctx);
+        let Some(tray_icon) = tray_icon else {
+            return false;
+        };
+        self._tray_icon = Some(tray_icon);
+        self.tray_commands = tray_commands;
+        true
+    }
+
+    fn drain_library_loader(&mut self) {
+        let Some(rx) = &self.library_rx else { return };
+        let Ok(result) = rx.try_recv() else { return };
+        self.library_rx = None;
+        self.library_loading = false;
+        self.merge_loaded_playlist(result.playlist);
+        self.report_errors(result.errors);
+    }
+
+    fn merge_loaded_playlist(&mut self, loaded: Playlist) {
+        for track in loaded.tracks {
+            if !self
+                .playlist
+                .tracks
+                .iter()
+                .any(|existing| existing.path == track.path)
+            {
+                self.playlist.tracks.push(track);
+            }
+        }
     }
 
     fn drain_events(&mut self) {
@@ -301,10 +336,12 @@ impl MusicApp {
             return;
         }
         let path = track.path.clone();
-        let cover = track.cover.clone();
-        self.cover_key = Some(path);
-        self.cover_texture = cover.as_ref().and_then(|bytes| {
-            let image = image::load_from_memory(bytes).ok()?.to_rgba8();
+        self.cover_key = Some(path.clone());
+        self.cover_texture = read_cover(&path).as_ref().and_then(|bytes| {
+            let image = image::load_from_memory(bytes)
+                .ok()?
+                .thumbnail(256, 256)
+                .to_rgba8();
             let size = [image.width() as usize, image.height() as usize];
             Some(ctx.load_texture(
                 "album-cover",
@@ -354,9 +391,15 @@ impl eframe::App for MusicApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.drain_library_loader();
         self.drain_events();
         self.update_cover(&ctx);
-        ctx.request_repaint_after(Duration::from_millis(33));
+        let repaint_after = if self.is_playing || self.library_loading {
+            Duration::from_millis(33)
+        } else {
+            Duration::from_millis(250)
+        };
+        ctx.request_repaint_after(repaint_after);
         ui.painter().rect_filled(ui.max_rect(), 0, BG);
 
         egui::Panel::top("header")
@@ -512,7 +555,11 @@ impl eframe::App for MusicApp {
                         {
                             self.close_prompt = false;
                             if self.close_to_tray {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                                if self.ensure_tray(&ctx) {
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                                } else {
+                                    self.status = Some("系统托盘不可用，无法最小化到后台".into());
+                                }
                             } else {
                                 self.allow_close = true;
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -748,11 +795,12 @@ impl MusicApp {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label(RichText::new("播放列表").size(18.0).color(TEXT).strong());
-                ui.label(
-                    RichText::new(format!("{} 首本地音乐", self.playlist.tracks.len()))
-                        .size(11.0)
-                        .color(MUTED),
-                );
+                let summary = if self.library_loading {
+                    format!("正在加载音乐库 · 已发现 {} 首", self.playlist.tracks.len())
+                } else {
+                    format!("{} 首本地音乐", self.playlist.tracks.len())
+                };
+                ui.label(RichText::new(summary).size(11.0).color(MUTED));
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
@@ -778,6 +826,18 @@ impl MusicApp {
         let mut remove = None;
         let mut move_to = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
+            if self.library_loading && self.playlist.tracks.is_empty() {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(32.0);
+                    ui.spinner();
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("正在扫描 data 目录...")
+                            .size(13.0)
+                            .color(MUTED),
+                    );
+                });
+            }
             for (index, track) in self.playlist.tracks.iter().enumerate() {
                 let current = self.playlist.current == Some(index);
                 let frame = egui::Frame::new()
@@ -1098,6 +1158,28 @@ fn music_data_dir() -> PathBuf {
         .join("data")
 }
 
+fn spawn_library_loader(data_dir: PathBuf, ctx: egui::Context) -> Receiver<LibraryLoadResult> {
+    let (sender, receiver) = mpsc::channel();
+    thread::Builder::new()
+        .name("soundcargo-library-loader".into())
+        .spawn(move || {
+            let mut playlist = Playlist::default();
+            let mut errors = Vec::new();
+            if let Err(err) = fs::create_dir_all(&data_dir) {
+                errors.push(format!(
+                    "无法创建音乐数据目录 {}：{err}",
+                    data_dir.display()
+                ));
+            } else {
+                errors.extend(playlist.add_folder(&data_dir));
+            }
+            let _ = sender.send(LibraryLoadResult { playlist, errors });
+            ctx.request_repaint();
+        })
+        .expect("failed to create library loader thread");
+    receiver
+}
+
 fn copy_music_to_data(source: &Path, data_dir: &Path) -> Result<PathBuf, String> {
     if !crate::utils::is_mp3(source) {
         return Err(format!("仅支持 MP3 文件：{}", source.display()));
@@ -1189,6 +1271,8 @@ fn configure_style(ctx: &egui::Context) {
 fn configure_fonts(ctx: &egui::Context) {
     let candidates = if cfg!(target_os = "windows") {
         vec![
+            r"C:\Windows\Fonts\simhei.ttf",
+            r"C:\Windows\Fonts\Deng.ttf",
             r"C:\Windows\Fonts\msyh.ttc",
             r"C:\Windows\Fonts\segoeui.ttf",
         ]

@@ -27,7 +27,6 @@ pub struct Track {
     pub artist: String,
     pub album: String,
     pub duration: Duration,
-    pub cover: Option<Vec<u8>>,
     pub lrc_path: Option<PathBuf>,
 }
 
@@ -53,10 +52,6 @@ impl Track {
             .and_then(TagLike::album)
             .unwrap_or("Unknown album")
             .to_owned();
-        let cover = tag
-            .as_ref()
-            .and_then(|t| t.pictures().next())
-            .map(|p| p.data.clone());
         let lrc_candidate = path.with_extension("lrc");
         let lrc_path = lrc_candidate.exists().then_some(lrc_candidate);
 
@@ -75,10 +70,15 @@ impl Track {
             artist,
             album,
             duration,
-            cover,
             lrc_path,
         })
     }
+}
+
+pub fn read_cover(path: &Path) -> Option<Vec<u8>> {
+    Tag::read_from_path(path)
+        .ok()
+        .and_then(|tag| tag.pictures().next().map(|picture| picture.data.clone()))
 }
 
 fn probe_duration(path: &Path) -> Result<Duration> {
